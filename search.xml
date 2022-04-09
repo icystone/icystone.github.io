@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search>
+  <entry>
+    <title>test</title>
+    <url>/2020/10/04/golang/golang/test/</url>
+    <content><![CDATA[<h3 id="Test"><a href="#Test" class="headerlink" title="Test"></a>Test</h3><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span>&#123;</span><br><span class="line">    fmt.Println(<span class="string">&quot;wtf&quot;</span>)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<pre class="mermaid">graph TD
+    B((开始)) -->C{判断}
+    C --  a=1 -->D[执行语句1]
+    C --  a=2  -->E[执行语句2]
+    C --  a=3 -->F[执行语句3]
+    C -- a=4  -->G[执行语句4]
+    D--> AA((结束))
+    E--> AA
+    F--> AA
+   G--> AA</pre>]]></content>
+      <categories>
+        <category>golang</category>
+      </categories>
+  </entry>
+  <entry>
+    <title>kubenetes 资源更新</title>
+    <url>/2022/04/09/kubenetes/kubenetes/update/</url>
+    <content><![CDATA[<h1 id="k8s-更新机制"><a href="#k8s-更新机制" class="headerlink" title="k8s 更新机制"></a>k8s 更新机制</h1><p> <code>metadata.resourceVersion</code>：每个资源从创建开始都有一个 resourceVersion 字段，代表该资源在下层数据库中存储的版本，每次修改，版本号都会发生变化。   </p>
+<blockquote>
+<p><a href="https://kubernetes.io/zh/docs/reference/using-api/api-concepts/#resource-versions">资源版本</a>中指出，该版本号是一个k8s的内部机制，用户不能假定资源版本是某种数值标识，不可以对两个资源版本值进行比较大小。</p>
+</blockquote>
+<p>k8s 要求用户 update 的对象必须带有 resourceVersion。并且在 update 时会比较<code>提交的 resourceVersion</code> 与<code>当前 k8s 中这个对象最新的 resourceVersion</code>一致，才能接收本次 update。否则 api server 会拒绝请求并告诉用户发生了 confilct。</p>
+<h1 id="k8s-apply"><a href="#k8s-apply" class="headerlink" title="k8s apply"></a>k8s apply</h1><h2 id="client-side-apply"><a href="#client-side-apply" class="headerlink" title="client-side apply"></a>client-side apply</h2><p>首先解析用户提交的数据(YAML&#x2F;JSON)为一个对象A；然后调用 Get 接口从 k8s 中查询这个资源对象；</p>
+<ul>
+<li>如果查询结果不存在，kubectl 将本次用户提交的数据记录到<code>对象 A 的 annotation 中</code>(key 为 <code>kubectl.kubernetes.io/last-applied-configuration</code>)，这些内容用来计算配置文件中已经移除的字段。最后将对象 A 提交给 k8s 创建；</li>
+<li>如果查询到 k8s 中已有这个资源，假设为对象 B：<ol>
+<li>kubectl 尝试从对象 B 的 annotation 中取出 <code>kubectl.kubernetes.io/last-applied-configuration</code>（对应了上一次提交的内容）</li>
+<li>kubectl 根据前一次 apply 的内容和本次 apply 的内容计算出要删除的字段和发生过修改的字段，得到 patch Request</li>
+<li>将新的配置文件添加到本次的 <code>kubectl.kubernetes.io/last-applied-configuration</code>，最后用 patch 请求提交给 k8s(默认为 strategic，如果是 CRD 使用 merge)</li>
+</ol>
+</li>
+</ul>
+<h2 id="server-side-apply"><a href="#server-side-apply" class="headerlink" title="server-side apply"></a>server-side apply</h2><p>从 Kubernetes v1.18 开始取代 client-side apply。<br>添加 <code>metadata.managedFields</code> 来明确指定谁管理哪些资源字段。当使用 <code>server-side apply</code>时，尝试去改变一个被其他人管理的字段，会导致请求被拒绝。<br>如果两个或以上的应用者均把同一个字段设置为相同值，他们将共享此字段的所有权。 后续任何改变共享字段值的尝试，不管由那个应用者发起，都会导致<code>冲突</code>。 共享字段的所有者可以放弃字段的所有权，这只需从配置文件中删除该字段即可。<br><code>冲突</code>是一种特定的错误状态， 发生在执行 Apply 改变一个字段，而恰巧该字段被其他用户声明过主权时。 这可以防止一个应用者不小心覆盖掉其他用户设置的值。 冲突发生时，应用者有三种办法来解决它：</p>
+<ul>
+<li><p>覆盖前值，成为唯一的管理器： 如果打算覆盖该值（或应用者是一个自动化部件，比如控制器）， 应用者应该设置查询参数 force 为 true，然后再发送一次请求。 这将强制操作成功，改变字段的值，从所有其他管理器的 managedFields 条目中删除指定字段。</p>
+</li>
+<li><p>不覆盖前值，放弃管理权： 如果应用者不再关注该字段的值， 可以从配置文件中删掉它，再重新发送请求。 这就保持了原值不变，并从 managedFields 的应用者条目中删除该字段。</p>
+</li>
+<li><p>不覆盖前值，成为共享的管理器： 如果应用者仍然关注字段值，并不想覆盖它， 他们可以在配置文件中把字段的值改为和服务器对象一样，再重新发送请求。 这样在不改变字段值的前提下， 就实现了字段管理被应用者和所有声明了管理权的其他的字段管理器共享。</p>
+</li>
+</ul>
+<p>更多参考<a href="https://kubernetes.io/zh/docs/reference/using-api/server-side-apply/">server-side-apply</a></p>
+<h1 id="k8s-patch"><a href="#k8s-patch" class="headerlink" title="k8s patch"></a>k8s patch</h1><p>当用户对某个资源对象提交一个 patch 请求时，api server 不会考虑版本问题，直接接收 patch 请求，并更新版本号。<br>目前 k8s 提供了 3 种 patch 策略：json、merge、strategic</p>
+<h2 id="json"><a href="#json" class="headerlink" title="json"></a>json</h2><p>JSON patch是执行在资源对象上的一系列操作，如下所示：</p>
+<figure class="highlight json"><table><tr><td class="code"><pre><span class="line"><span class="punctuation">[</span></span><br><span class="line">  <span class="punctuation">&#123;</span> <span class="attr">&quot;op&quot;</span><span class="punctuation">:</span> <span class="string">&quot;replace&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;path&quot;</span><span class="punctuation">:</span> <span class="string">&quot;/baz&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;value&quot;</span><span class="punctuation">:</span> <span class="string">&quot;boo&quot;</span> <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="punctuation">&#123;</span> <span class="attr">&quot;op&quot;</span><span class="punctuation">:</span> <span class="string">&quot;add&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;path&quot;</span><span class="punctuation">:</span> <span class="string">&quot;/hello&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;value&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="string">&quot;world&quot;</span><span class="punctuation">]</span> <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">  <span class="punctuation">&#123;</span> <span class="attr">&quot;op&quot;</span><span class="punctuation">:</span> <span class="string">&quot;remove&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;path&quot;</span><span class="punctuation">:</span> <span class="string">&quot;/foo&quot;</span> <span class="punctuation">&#125;</span></span><br><span class="line"><span class="punctuation">]</span></span><br></pre></td></tr></table></figure>
+<p>细节参考：<a href="http://jsonpatch.com/">JSON patch</a><br>Notice：如果其中任何一个操作失败，那么整个 patch 都不成功。</p>
+<h2 id="merge"><a href="#merge" class="headerlink" title="merge"></a>merge</h2><p>merge patch包含一个对资源对象的<code>部分 json 描述</code>，该 json 对象被提交到服务端，并和服务端的对象合并。</p>
+<p>原始JSON：</p>
+<figure class="highlight json"><table><tr><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">        <span class="attr">&quot;title&quot;</span><span class="punctuation">:</span> <span class="string">&quot;Goodbye!&quot;</span><span class="punctuation">,</span></span><br><span class="line">        <span class="attr">&quot;author&quot;</span> <span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">      <span class="attr">&quot;givenName&quot;</span> <span class="punctuation">:</span> <span class="string">&quot;John&quot;</span><span class="punctuation">,</span></span><br><span class="line">      <span class="attr">&quot;familyName&quot;</span> <span class="punctuation">:</span> <span class="string">&quot;Doe&quot;</span></span><br><span class="line">        <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">        <span class="attr">&quot;tags&quot;</span><span class="punctuation">:</span><span class="punctuation">[</span> <span class="string">&quot;example&quot;</span><span class="punctuation">,</span> <span class="string">&quot;sample&quot;</span> <span class="punctuation">]</span><span class="punctuation">,</span></span><br><span class="line">        <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;This will be unchanged&quot;</span></span><br><span class="line">      <span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>Patch Request:</p>
+<figure class="highlight json"><table><tr><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">         <span class="attr">&quot;title&quot;</span><span class="punctuation">:</span> <span class="string">&quot;Hello!&quot;</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;phoneNumber&quot;</span><span class="punctuation">:</span> <span class="string">&quot;+01-123-456-7890&quot;</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;author&quot;</span><span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">       <span class="attr">&quot;familyName&quot;</span><span class="punctuation">:</span> <span class="keyword">null</span></span><br><span class="line">         <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;tags&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span> <span class="string">&quot;example&quot;</span> <span class="punctuation">]</span></span><br><span class="line">       <span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>Result:</p>
+<figure class="highlight json"><table><tr><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span></span><br><span class="line">         <span class="attr">&quot;title&quot;</span><span class="punctuation">:</span> <span class="string">&quot;Hello!&quot;</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;author&quot;</span> <span class="punctuation">:</span> <span class="punctuation">&#123;</span></span><br><span class="line">       <span class="attr">&quot;givenName&quot;</span> <span class="punctuation">:</span> <span class="string">&quot;John&quot;</span></span><br><span class="line">         <span class="punctuation">&#125;</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;tags&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span> <span class="string">&quot;example&quot;</span> <span class="punctuation">]</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;content&quot;</span><span class="punctuation">:</span> <span class="string">&quot;This will be unchanged&quot;</span><span class="punctuation">,</span></span><br><span class="line">         <span class="attr">&quot;phoneNumber&quot;</span><span class="punctuation">:</span> <span class="string">&quot;+01-123-456-7890&quot;</span></span><br><span class="line">       <span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure>
+<p>细节参考：<a href="https://datatracker.ietf.org/doc/html/rfc7386">merge patch</a><br>Notice：如果 merge 的目标不是 object，那么执行的操作是 replace，比如数组。</p>
+<h2 id="strategic"><a href="#strategic" class="headerlink" title="strategic"></a>strategic</h2><p>k8s 独有的策略，避免了 merge Patch 直接被 replace 的行为。<br>原始：</p>
+<figure class="highlight yaml"><table><tr><td class="code"><pre><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">spec:</span></span><br><span class="line">      <span class="attr">containers:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">patch-demo-ctr</span></span><br><span class="line">        <span class="attr">image:</span> <span class="string">nginx</span></span><br></pre></td></tr></table></figure>
+<p>Patch Request：</p>
+<figure class="highlight yaml"><table><tr><td class="code"><pre><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">spec:</span></span><br><span class="line">      <span class="attr">containers:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">patch-demo-ctr-2</span></span><br><span class="line">        <span class="attr">image:</span> <span class="string">redis</span></span><br></pre></td></tr></table></figure>
+<p>Result:</p>
+<figure class="highlight yaml"><table><tr><td class="code"><pre><span class="line"><span class="attr">spec:</span></span><br><span class="line">  <span class="attr">template:</span></span><br><span class="line">    <span class="attr">spec:</span></span><br><span class="line">      <span class="attr">containers:</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">patch-demo-ctr</span></span><br><span class="line">        <span class="attr">image:</span> <span class="string">nginx</span></span><br><span class="line">      <span class="bullet">-</span> <span class="attr">name:</span> <span class="string">patch-demo-ctr-2</span></span><br><span class="line">        <span class="attr">image:</span> <span class="string">redis</span></span><br></pre></td></tr></table></figure>
+
+<p>在使用 strategic Patch 时，list 到底 replace or merge 取决于它的 <code>patchStrategy</code><br>patchStrategy 目前支持两种：   </p>
+<ol>
+<li>merge 在 patch 数组时可以根据指定的 name 来 patch，避免整个数组 replace</li>
+<li>retainKeys 必须显式地声明替换某个key</li>
+</ol>
+<p>For example:</p>
+<figure class="highlight golang"><table><tr><td class="code"><pre><span class="line"><span class="keyword">type</span> PodSpec <span class="keyword">struct</span> &#123;</span><br><span class="line">  ...</span><br><span class="line">  Containers []Container <span class="string">`json:&quot;containers&quot; patchStrategy:&quot;merge&quot; patchMergeKey:&quot;name&quot; ...`</span></span><br></pre></td></tr></table></figure>
+<p>Notice：CRD 不支持 strategic Patch。   </p>
+<p><a href="https://kubernetes.io/zh/docs/tasks/manage-kubernetes-objects/update-api-object-kubectl-patch/">使用参考</a><br>可以通过<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.23/#podspec-v1-core">官方API文档</a>查看哪些字段支持 merge、retainKeys   </p>
+]]></content>
+      <categories>
+        <category>kubenetes</category>
+      </categories>
+  </entry>
+</search>
